@@ -1,10 +1,7 @@
 import datetime
-import gzip
 import os
-import pathlib
 import threading
 import xml.etree.ElementTree as ET
-from io import BytesIO
 from urllib import request
 
 import xbmc
@@ -23,6 +20,7 @@ class Annatel():
     def __init__(self):
         self.username = __ADDON__.getSetting('username')
         self.password = __ADDON__.getSetting('password')
+        self.m3u_path_setting = __ADDON__.getSetting('m3u_path')
         self.api_url = f"http://www.annatel.tv/api/getchannels?login={self.username}&password={self.password}"
 
     def reset(self):
@@ -67,10 +65,44 @@ class Annatel():
             m3u_list.append(url)
         
         m3u_string = '\n'.join(m3u_list)
-        m3u_path = os.path.join(__ADDON_PROFILE__, "channels.m3u")
+        
+        # Use the configured path or fallback to platform-appropriate paths
+        if self.m3u_path_setting:
+            if self.m3u_path_setting.startswith('special://'):
+                # Translate Kodi special paths to real filesystem paths
+                base_path = xbmcvfs.translatePath(self.m3u_path_setting)
+            else:
+                # Use the path as-is if it's already a filesystem path
+                base_path = self.m3u_path_setting
+        else:
+            # Platform-specific fallback paths that are accessible to IPTV Simple
+            try:
+                # Try Android media path first
+                base_path = "/storage/emulated/0/Android/media/"
+                if not os.path.exists(base_path):
+                    # Fallback to userdata if Android path doesn't exist
+                    base_path = xbmcvfs.translatePath("special://userdata/")
+            except:
+                base_path = xbmcvfs.translatePath("special://userdata/")
+            
+        # Ensure the directory exists
+        if not xbmcvfs.exists(base_path):
+            xbmcvfs.mkdirs(base_path)
+            
+        m3u_path = os.path.join(base_path, "channels.m3u")
+        
+        # Log the actual path for debugging
+        xbmc.log(f"Annatel+: Saving M3U file to: {m3u_path}", xbmc.LOGINFO)
 
-        with open(m3u_path, 'w', encoding='utf-8') as f1:
-            f1.write(m3u_string)
+        # Use Kodi's VFS for better cross-platform compatibility
+        try:
+            with xbmcvfs.File(m3u_path, 'w') as f1:
+                f1.write(m3u_string.encode('utf-8'))
+        except Exception as e:
+            # Fallback to regular file operations if VFS fails
+            xbmc.log(f"Annatel+: VFS write failed, using fallback: {str(e)}", xbmc.LOGWARNING)
+            with open(m3u_path, 'w', encoding='utf-8') as f1:
+                f1.write(m3u_string)
         
         annatel_notification("Links Updated")
         return m3u_path
@@ -91,48 +123,14 @@ class IPTV():
             xbmcgui.Dialog().ok("Annatel+", "PVR IPTVSimple is Disable. Plase enable and restart Kodi")
             return None
 
-    def load_files(self, m3u_file, epg_file):
-        # if self.addon.getSetting("m3uPathType") != "0" or self.addon.getSetting("m3uPath") != m3u_file:
+    def load_files(self, m3u_file):
         self.addon.setSetting("m3uPathType", "0")
         self.addon.setSetting("m3uPath", m3u_file)
-        # if self.addon.getSetting("epgPathType") != "0" or self.addon.getSetting("epgPath") != epg_file:
-        self.addon.setSetting("epgPathType", "0")
-        self.addon.setSetting("epgPath", epg_file)
 
     def force_reload(self):
         # Use JSON execution to disable and enable IPTV Simple Addon
         xbmc.executeJSONRPC('{"jsonrpc":"2.0", "method": "Addons.SetAddonEnabled","id":7,"params":{"addonid": "pvr.iptvsimple","enabled":false }}')
         xbmc.executeJSONRPC('{"jsonrpc":"2.0", "method": "Addons.SetAddonEnabled","id":7,"params":{"addonid": "pvr.iptvsimple","enabled":true }}')
-
-
-class EPG():
-    def __init__(self):
-        self.url = 'http://homebrain.3wfrance.fr:8001/annatel/XmltvAnnatel.xml.gz'
-        self.epg_tvguide = os.path.join(__ADDON_PROFILE__, "tvguide.xml")
-        xbmc.log(self.epg_tvguide, xbmc.LOGINFO)
-
-
-    def download_new_epg(self):
-        r = request.urlopen(self.url)
-        buffer = BytesIO(r.read())
-        f = gzip.GzipFile(fileobj=buffer)
-        with open(self.epg_tvguide, 'wb') as f1:
-            f1.write(f.read())
-        xbmc.log(self.epg_tvguide, xbmc.LOGINFO)
-
-    def generate_epg_file(self):
-        
-        if os.path.isfile(self.epg_tvguide) and not self.is_epg_old():
-            return self.epg_tvguide
-
-        annatel_notification("Updating EPG...")
-        self.download_new_epg()
-        annatel_notification("EPG Updated")
-        return self.epg_tvguide
-    
-    def is_epg_old(self):
-        epg_stat = pathlib.Path(self.epg_tvguide).stat()
-        return (datetime.datetime.now() - datetime.datetime.fromtimestamp(epg_stat.st_mtime) > datetime.timedelta(days=1))
 
 
 def annatel_notification(text, mode=None):
@@ -145,12 +143,11 @@ def annatel_notification(text, mode=None):
     xbmcgui.Dialog().notification("Annatel+", text, icon, 5, True)
 
 
-def refresh_links(iptv, epg, annatel):
+def refresh_links(iptv, annatel):
     while True:
         try:
             m3u_file = annatel.generate_m3u_file()
-            epg_file = epg.generate_epg_file()
-            iptv.load_files(m3u_file, epg_file)
+            iptv.load_files(m3u_file)
 
         except Exception as e:
             annatel_notification(str(e))
@@ -162,7 +159,6 @@ def main():
 
     iptv = IPTV()
     annatel = Annatel()
-    epg = EPG()
     
     if not iptv:
         return
@@ -172,6 +168,6 @@ def main():
         if response:
             annatel.annatel_configuration()
     else:
-        threading.Thread(target=refresh_links, args=(iptv, epg, annatel)).start()
+        threading.Thread(target=refresh_links, args=(iptv, annatel)).start()
 
 main()

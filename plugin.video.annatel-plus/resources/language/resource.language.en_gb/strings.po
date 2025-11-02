@@ -16,3 +16,7 @@ msgstr "Username"
 msgctxt "#32021"
 msgid "Password"
 msgstr "Password"
+
+msgctxt "#32022"
+msgid "M3U File Path"
+msgstr "M3U File Path"

@@ -2,4 +2,5 @@
 <settings>
     <setting id="username" type="text" label="32020" default=""/>
     <setting id="password" type="text" label="32021" default="" option="hidden"/>
+    <setting id="m3u_path" type="folder" label="32022" default="/storage/emulated/0/Android/media/"/>
 </settings>
